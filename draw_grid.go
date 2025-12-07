@@ -1,11 +1,13 @@
 package main
 
 import (
+	"image/color"
+	"math"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
-	"image/color"
 )
 
 const (
@@ -30,19 +32,26 @@ func NewDrawGrid() *DrawGrid {
 	return d
 }
 
-func (d *DrawGrid) CreateRenderer() fyne.WidgetRenderer {
-	objects := make([]fyne.CanvasObject, 0, GridSize*GridSize)
-
+func (d *DrawGrid) Clear() {
 	for y := 0; y < GridSize; y++ {
 		for x := 0; x < GridSize; x++ {
-			rect := canvas.NewRectangle(color.White)
-			rect.StrokeColor = color.RGBA{200, 200, 200, 255}
-			rect.StrokeWidth = 1
-			objects = append(objects, rect)
+			d.Data[y][x] = 0
 		}
 	}
+	d.Refresh()
+}
 
-	return &drawGridRenderer{grid: d, rects: objects}
+func (d *DrawGrid) CreateRenderer() fyne.WidgetRenderer {
+	rects := make([]fyne.CanvasObject, 0, GridSize*GridSize)
+	for y := 0; y < GridSize; y++ {
+		for x := 0; x < GridSize; x++ {
+			r := canvas.NewRectangle(color.White)
+			r.StrokeColor = color.RGBA{200, 200, 200, 255}
+			r.StrokeWidth = 1
+			rects = append(rects, r)
+		}
+	}
+	return &drawGridRenderer{grid: d, rects: rects}
 }
 
 type drawGridRenderer struct {
@@ -54,10 +63,8 @@ func (r *drawGridRenderer) Layout(size fyne.Size) {
 	for y := 0; y < GridSize; y++ {
 		for x := 0; x < GridSize; x++ {
 			idx := y*GridSize + x
-			px := float32(x * PixelSize)
-			py := float32(y * PixelSize)
 			r.rects[idx].Resize(fyne.NewSize(PixelSize, PixelSize))
-			r.rects[idx].Move(fyne.NewPos(px, py))
+			r.rects[idx].Move(fyne.NewPos(float32(x*PixelSize), float32(y*PixelSize)))
 		}
 	}
 }
@@ -70,15 +77,9 @@ func (r *drawGridRenderer) Refresh() {
 	for y := 0; y < GridSize; y++ {
 		for x := 0; x < GridSize; x++ {
 			idx := y*GridSize + x
-			rect := r.rects[idx].(*canvas.Rectangle)
-
-			if r.grid.Data[y][x] == 1 {
-				rect.FillColor = color.Black
-			} else {
-				rect.FillColor = color.White
-			}
-
-			rect.Refresh()
+			gray := uint8(255 - r.grid.Data[y][x]*255)
+			r.rects[idx].(*canvas.Rectangle).FillColor = color.RGBA{gray, gray, gray, 255}
+			r.rects[idx].Refresh()
 		}
 	}
 }
@@ -86,32 +87,33 @@ func (r *drawGridRenderer) Refresh() {
 func (r *drawGridRenderer) Objects() []fyne.CanvasObject { return r.rects }
 func (r *drawGridRenderer) Destroy()                     {}
 
-func (d *DrawGrid) pointToPixel(p fyne.Position) (int, int, bool) {
-	x := int(p.X) / PixelSize
-	y := int(p.Y) / PixelSize
-	if x < 0 || x >= GridSize || y < 0 || y >= GridSize {
-		return 0, 0, false
-	}
-	return x, y, true
-}
+func (d *DrawGrid) mouseDraw(pos fyne.Position) {
+	cx := float64(pos.X)
+	cy := float64(pos.Y)
 
-func (d *DrawGrid) mouseDraw(p fyne.Position) {
-	x, y, ok := d.pointToPixel(p)
-	if !ok {
-		return
-	}
-	d.Data[y][x] = 1
-	if y+1 < GridSize && x+1 < GridSize {
-		d.Data[y+1][x+1] = 1
+	for y := 0; y < GridSize; y++ {
+		for x := 0; x < GridSize; x++ {
+			px := float64(x*PixelSize + PixelSize/2)
+			py := float64(y*PixelSize + PixelSize/2)
+			dx := cx - px
+			dy := cy - py
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist < PixelSize*1.5 { // радиус влияния
+				// чем ближе к центру пикселя — тем сильнее цвет
+				influence := 1 - dist/(PixelSize*1.5)
+				if influence < 0 {
+					influence = 0
+				}
+				// аккумулируем, но не больше 1
+				d.Data[y][x] += influence
+				if d.Data[y][x] > 1 {
+					d.Data[y][x] = 1
+				}
+			}
+		}
 	}
 
-	if y+1 < GridSize {
-		d.Data[y+1][x] = 1
-	}
-
-	if x+1 < GridSize {
-		d.Data[y][x+1] = 1
-	}
+	d.Refresh()
 }
 
 func (d *DrawGrid) getDataForPredict() []float64 {
@@ -150,12 +152,3 @@ func (d *DrawGrid) MouseMoved(ev *desktop.MouseEvent) {
 func (d *DrawGrid) MouseIn(*desktop.MouseEvent) {}
 
 func (d *DrawGrid) MouseOut() {}
-
-func (d *DrawGrid) Clear() {
-	for y := 0; y < GridSize; y++ {
-		for x := 0; x < GridSize; x++ {
-			d.Data[y][x] = 0
-		}
-	}
-	d.Refresh()
-}
